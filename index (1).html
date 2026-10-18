@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Naive vs Rabin-Karp</title>
+<style>
+  :root { --bg:#fff; --fg:#111; --mute:#777; --line:#e6e6e6; --hit:#111; --spur:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#eee; --mute:#888; --line:#2a2a2a; --hit:#eee; --spur:#ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:64px 24px 96px; }
+  h1 { font-size:22px; font-weight:600; margin:0 0 4px; letter-spacing:-.01em; }
+  p.sub { color:var(--mute); margin:0 0 40px; }
+  nav { display:flex; gap:24px; border-bottom:1px solid var(--line); margin-bottom:32px; }
+  nav button { background:none; border:0; border-bottom:2px solid transparent; padding:8px 0; margin-bottom:-1px;
+    font:inherit; color:var(--mute); cursor:pointer; }
+  nav button[aria-selected="true"] { color:var(--fg); border-color:var(--fg); }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+  label { display:block; color:var(--mute); margin:0 0 4px; }
+  input { width:100%; font:inherit; font-family:ui-monospace, Menlo, Consolas, monospace; color:var(--fg);
+    background:transparent; border:0; border-bottom:1px solid var(--line); padding:8px 0; border-radius:0; }
+  input:focus { border-color:var(--fg); outline:none; }
+  .row { display:flex; gap:24px; flex-wrap:wrap; margin-bottom:20px; }
+  .row > div { flex:1 1 160px; }
+  .run { background:var(--fg); color:var(--bg); border:0; padding:9px 20px; font:inherit; cursor:pointer; margin-top:8px; }
+  .run:disabled { opacity:.5; cursor:wait; }
+  .panel[hidden] { display:none; }
+  .out { margin-top:40px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:32px; margin-bottom:24px; }
+  .pair h2 { font-size:15px; font-weight:600; margin:0 0 8px; }
+  dl { margin:0; } dl div { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:4px 0; }
+  dt { color:var(--mute); } dd { margin:0; font-variant-numeric:tabular-nums; }
+  .note { color:var(--mute); }
+  .ok { color:var(--fg); } .bad { color:var(--spur); }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  th, td { text-align:right; padding:6px 12px 6px 0; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--mute); font-weight:400; }
+  td.win { font-weight:600; }
+  tr.match td { font-weight:600; }
+  tr.spur td.t { color:var(--spur); }
+  .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
+  h3 { font-size:15px; font-weight:600; margin:32px 0 4px; }
+  .strip { font-family:ui-monospace, Menlo, Consolas, monospace; word-break:break-all; margin:12px 0 0; }
+  .strip mark { background:none; color:var(--bg); background:var(--fg); }
+  footer { margin-top:72px; color:var(--mute); font-size:13px; }
+  @media (max-width:560px){ .pair{ grid-template-columns:1fr; gap:16px; } main{ padding-top:40px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Naive vs Rabin-Karp</h1>
+  <p class="sub">Two ways to find a pattern in a text. Same input, same answer, different work.</p>
+
+  <nav role="tablist">
+    <button role="tab" aria-selected="true" data-tab="own">Your text</button>
+    <button role="tab" aria-selected="false" data-tab="rand">Random</button>
+    <button role="tab" aria-selected="false" data-tab="bench">Benchmark</button>
+  </nav>
+
+  <section class="panel" id="own">
+    <div class="row"><div><label for="t">Text</label><input id="t" value="AABAACAADAABAABA" spellcheck="false"></div></div>
+    <div class="row"><div><label for="p">Pattern</label><input id="p" value="AABA" spellcheck="false"></div></div>
+    <button class="run" id="runOwn">Compare</button>
+  </section>
+
+  <section class="panel" id="rand" hidden>
+    <div class="row">
+      <div><label for="rn">Text length (n)</label><input id="rn" type="number" min="10" max="200000" value="5000"></div>
+      <div><label for="rm">Pattern length (m)</label><input id="rm" type="number" min="1" max="200" value="8"></div>
+    </div>
+    <p class="note">Random text over A, B, C, D (seed 42). The pattern is cut from the text.</p>
+    <button class="run" id="runRand">Compare</button>
+  </section>
+
+  <section class="panel" id="bench" hidden>
+    <p class="note">Runs three cases, averaging 3 runs each. Rabin-Karp uses d = 256, q = 101.</p>
+    <button class="run" id="runBench">Run benchmark</button>
+  </section>
+
+  <div class="out" id="out" aria-live="polite"></div>
+
+  <footer>Design and Analysis of Algorithms mini-project · Wadia College of Engineering, Pune</footer>
+</main>
+
+<script>
+const D = 256, Q = 101;
+
+/* ---------- algorithms ---------- */
+function naive(T, P) {
+  const n = T.length, m = P.length, pos = [], per = [];
+  let cmp = 0;
+  for (let s = 0; s <= n - m; s++) {
+    let j = 0, c = 0;
+    while (j < m) { c++; if (T.charCodeAt(s + j) !== P.charCodeAt(j)) break; j++; }
+    cmp += c; per.push(c);
+    if (j === m) pos.push(s);
+  }
+  return { pos, cmp, per };
+}
+
+function rabinKarp(T, P) {
+  const n = T.length, m = P.length, pos = [], per = [], hashes = [];
+  let cmp = 0, hm = 0, spur = 0;
+  if (m > n) return { pos, cmp, hm, spur, per, hashes, p: 0 };
+  let h = 1; for (let i = 0; i < m - 1; i++) h = (h * D) % Q;
+  let p = 0, t = 0;
+  for (let i = 0; i < m; i++) { p = (D * p + P.charCodeAt(i)) % Q; t = (D * t + T.charCodeAt(i)) % Q; }
+  for (let s = 0; s <= n - m; s++) {
+    let c = 0, spurious = false;
+    hashes.push(t);
+    if (p === t) {
+      hm++;
+      let j = 0;
+      while (j < m) { c++; if (T.charCodeAt(s + j) !== P.charCodeAt(j)) break; j++; }
+      if (j === m) pos.push(s); else { spur++; spurious = true; }
+    }
+    cmp += c; per.push(spurious ? -c : c);
+    if (s < n - m) {
+      t = (D * (t - T.charCodeAt(s) * h) + T.charCodeAt(s + m)) % Q;
+      if (t < 0) t += Q;
+    }
+  }
+  return { pos, cmp, hm, spur, per, hashes, p };
+}
+
+function timeIt(fn, runs = 3) {
+  let total = 0;
+  for (let i = 0; i < runs; i++) { const a = performance.now(); fn(); total += performance.now() - a; }
+  return total / runs / 1000; // seconds
+}
+
+/* ---------- helpers ---------- */
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function randomText(n, seed = 42) { const r = mulberry32(seed); let s = ''; for (let i = 0; i < n; i++) s += 'ABCD'[Math.floor(r() * 4)]; return s; }
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const fmt = x => x.toLocaleString('en-US');
+const sec = x => x.toFixed(6);
+const out = document.getElementById('out');
+
+/* ---------- views ---------- */
+function compare(T, P, trace) {
+  const a = naive(T, P), b = rabinKarp(T, P);
+  const ta = timeIt(() => naive(T, P)), tb = timeIt(() => rabinKarp(T, P));
+  const ok = same(a.pos, b.pos);
+  const ratio = tb > 0 ? ta / tb : 0;
+  let html = `
+  <div class="pair">
+    <div><h2>Naive</h2><dl>
+      <div><dt>Character comparisons</dt><dd>${fmt(a.cmp)}</dd></div>
+      <div><dt>Time</dt><dd>${sec(ta)} s</dd></div>
+    </dl></div>
+    <div><h2>Rabin-Karp</h2><dl>
+      <div><dt>Character comparisons</dt><dd>${fmt(b.cmp)}</dd></div>
+      <div><dt>Hash matches</dt><dd>${fmt(b.hm)}</dd></div>
+      <div><dt>Spurious hits</dt><dd>${fmt(b.spur)}</dd></div>
+      <div><dt>Time</dt><dd>${sec(tb)} s</dd></div>
+    </dl></div>
+  </div>
+  <p>${ok ? '<span class="ok">Both found the same positions.</span>' : '<span class="bad">The positions differ.</span>'}
+     ${a.pos.length ? `${a.pos.length} match${a.pos.length > 1 ? 'es' : ''} at ${a.pos.slice(0, 20).join(', ')}${a.pos.length > 20 ? '…' : ''}.` : 'No match.'}
+     <span class="note">Time ratio ${ratio.toFixed(2)} (above 1 means Rabin-Karp was faster).</span></p>`;
+  if (trace && T.length <= 60 && P.length) {
+    const set = new Set(); a.pos.forEach(s => { for (let i = 0; i < P.length; i++) set.add(s + i); });
+    html += `<p class="strip">${[...T].map((c, i) => set.has(i) ? `<mark>${esc(c)}</mark>` : esc(c)).join('')}</p>`;
+  }
+  if (trace && b.per.length <= 60 && P.length && P.length <= T.length) {
+    html += `<h3>Shift by shift</h3><p class="note">Pattern hash = ${b.p}</p><div class="scroll"><table>
+      <tr><th>Shift</th><th>Window</th><th>Naive</th><th>Window hash</th><th>Rabin-Karp</th><th></th></tr>`;
+    b.per.forEach((c, s) => {
+      const spur = c < 0, m = b.pos.includes(s), cmpRK = Math.abs(c);
+      html += `<tr class="${m ? 'match' : spur ? 'spur' : ''}"><td>${s}</td><td class="mono" style="text-align:left">${esc(T.substr(s, P.length))}</td>
+        <td>${a.per[s]}</td><td>${b.hashes[s]}</td><td>${cmpRK}</td><td class="t">${m ? 'match' : spur ? 'spurious' : ''}</td></tr>`;
+    });
+    html += `<tr><td>Total</td><td></td><td>${a.cmp}</td><td></td><td>${b.cmp}</td><td></td></tr></table></div>`;
+  }
+  return html;
+}
+
+function bench() {
+  let html = '';
+  const row = (cells, extra = '') => `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
+  const head = h => `<tr>${h.map(x => `<th>${x}</th>`).join('')}</tr>`;
+  const run = (T, P) => {
+    const a = naive(T, P), b = rabinKarp(T, P);
+    const ta = timeIt(() => naive(T, P)), tb = timeIt(() => rabinKarp(T, P));
+    return { a, b, ta, tb, ok: same(a.pos, b.pos), r: ta / tb };
+  };
+  // A
+  html += `<h3>A · Random text, m = 8</h3><div class="scroll"><table>` +
+    head(['n', 'Naive cmp', 'RK cmp', 'Spurious', 'Naive (s)', 'RK (s)', 'Ratio', 'Same']);
+  for (const n of [1000, 5000, 10000, 50000, 100000]) {
+    const T = randomText(n), P = T.substr(Math.floor(n / 2), 8), x = run(T, P);
+    html += row([fmt(n), fmt(x.a.cmp), fmt(x.b.cmp), fmt(x.b.spur), sec(x.ta), sec(x.tb), x.r.toFixed(2), x.ok]);
+  }
+  html += `</table></div>`;
+  // B
+  html += `<h3>B · Worst case for Naive (text A…A, pattern A…AB)</h3><div class="scroll"><table>` +
+    head(['n', 'm', 'Naive cmp', 'RK cmp', 'Naive (s)', 'RK (s)', 'Ratio', 'Same']);
+  for (const [n, m] of [[1000, 10], [5000, 20], [10000, 50], [50000, 50]]) {
+    const T = 'A'.repeat(n), P = 'A'.repeat(m - 1) + 'B', x = run(T, P);
+    html += row([fmt(n), m, fmt(x.a.cmp), fmt(x.b.cmp), sec(x.ta), sec(x.tb), x.r.toFixed(2), x.ok]);
+  }
+  html += `</table></div>`;
+  // C
+  html += `<h3>C · Worst case for Rabin-Karp (text A…A, pattern A…A)</h3><div class="scroll"><table>` +
+    head(['n', 'm', 'Matches', 'Naive cmp', 'RK cmp', 'Naive (s)', 'RK (s)', 'Ratio', 'Same']);
+  for (const [n, m] of [[1000, 10], [5000, 20], [10000, 50], [50000, 50]]) {
+    const T = 'A'.repeat(n), P = 'A'.repeat(m), x = run(T, P);
+    html += row([fmt(n), m, fmt(x.a.pos.length), fmt(x.a.cmp), fmt(x.b.cmp), sec(x.ta), sec(x.tb), x.r.toFixed(2), x.ok]);
+  }
+  html += `</table></div><p class="note">Ratio = Naive time ÷ Rabin-Karp time. Above 1 means Rabin-Karp was faster. Timings vary by machine.</p>`;
+  return html;
+}
+
+/* ---------- wiring ---------- */
+document.querySelectorAll('nav button').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', b === btn));
+  document.querySelectorAll('.panel').forEach(p => p.hidden = p.id !== btn.dataset.tab);
+  out.innerHTML = '';
+}));
+
+document.getElementById('runOwn').onclick = () => {
+  const T = document.getElementById('t').value, P = document.getElementById('p').value;
+  if (!T || !P) { out.innerHTML = '<p class="bad">Enter both a text and a pattern.</p>'; return; }
+  if (P.length > T.length) { out.innerHTML = '<p class="bad">The pattern is longer than the text.</p>'; return; }
+  out.innerHTML = compare(T, P, true);
+};
+
+document.getElementById('runRand').onclick = () => {
+  const n = Math.min(200000, Math.max(10, +document.getElementById('rn').value || 5000));
+  const m = Math.min(n, Math.max(1, +document.getElementById('rm').value || 8));
+  const T = randomText(n), P = T.substr(Math.floor(n / 2), m);
+  out.innerHTML = compare(T, P, true);
+};
+
+document.getElementById('runBench').onclick = e => {
+  const b = e.target; b.disabled = true; b.textContent = 'Running…'; out.innerHTML = '';
+  setTimeout(() => { out.innerHTML = bench(); b.disabled = false; b.textContent = 'Run benchmark'; }, 30);
+};
+</script>
+</body>
+</html>
